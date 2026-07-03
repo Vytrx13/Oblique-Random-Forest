@@ -1,11 +1,11 @@
 import numpy as np
-import pandas as pd
 from scipy.stats import entropy
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score
 from sklearn.preprocessing import StandardScaler
 from collections import Counter
-
+from sklearn.decomposition import PCA
+import pandas as pd
 
 class Node:
     def __init__(self, w_star=None, th_star=None, left=None, right=None, label=None):
@@ -54,7 +54,6 @@ class ObliqueDecisionTreeClassifier:
             w_star=w_star, th_star=th_star, left=left_subtree, right=right_subtree
         )
 
-    # gera n_projections vetores aleatorios e retorna a comb de vetor e limiar com maior ganho
     def get_best_split(self, X, Y):
         w_star, th_star = None, None
         max_info_gain = -float("inf")
@@ -72,8 +71,25 @@ class ObliqueDecisionTreeClassifier:
 
         for _ in range(self.n_projections):
             features = np.random.choice(m, size=k, replace=False)
+            X_subset = X[:, features]
+
             W = np.zeros(m)
-            W_subset = np.random.randn(k)
+
+            # NOVO: Verifica se há variação nos dados antes de rodar o PCA.
+            # Se a soma das variâncias das colunas sorteadas for próxima de zero,
+            # os dados são constantes e o PCA falhará.
+            total_variance = np.var(X_subset, axis=0).sum()
+
+            if X_subset.shape[0] > 1 and total_variance > 1e-6:
+                pca = PCA(n_components=1)
+                try:
+                    pca.fit(X_subset)
+                    W_subset = pca.components_[0]
+                except Exception:
+                    W_subset = np.random.randn(k)
+            else:
+                # Fallback ativado: amostra insuficiente ou dados constantes
+                W_subset = np.random.randn(k)
 
             norm = np.linalg.norm(W_subset)
             if norm > 0:
@@ -86,24 +102,18 @@ class ObliqueDecisionTreeClassifier:
             thresholds = np.percentile(feature_values, np.arange(5, 96, 5))
 
             for th in thresholds:
-
                 left_indices = feature_values <= th
                 right_indices = feature_values > th
 
                 Xi_left = X[left_indices]
                 Yi_left = Y[left_indices]
-
                 Xi_right = X[right_indices]
                 Yi_right = Y[right_indices]
 
                 if len(Xi_left) == 0 or len(Xi_right) == 0:
                     continue
 
-                gain = self.information_gain(
-                    Y,
-                    Yi_left,
-                    Yi_right,
-                )
+                gain = self.information_gain(Y, Yi_left, Yi_right)
 
                 if gain > max_info_gain:
                     max_info_gain = gain
@@ -216,9 +226,9 @@ def main():
 
     print("Treinando modelo na base local (80%)...")
     classifier_local = ObliqueRandomForest(
-        n_estimators=50,
+        n_estimators=10,
         max_depth=10,
-        n_projections=50,
+        n_projections=15,
         max_features="sqrt",
     )
     classifier_local.fit(X_train_local, y_train_local)
