@@ -2,105 +2,169 @@ import numpy as np
 import pandas as pd
 from scipy.stats import entropy
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score
+from sklearn.metrics import (
+    accuracy_score,
+    balanced_accuracy_score,
+    classification_report,
+    confusion_matrix,
+)
 from sklearn.preprocessing import StandardScaler
-from sklearn.discriminant_analysis import LinearDiscriminantAnalysis  # NOVO IMPORT
-from collections import Counter
+from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 
 
 class Node:
-    def __init__(self, w_star=None, th_star=None, left=None, right=None, label=None):
+    def __init__(
+        self, w_star=None, th_star=None, left=None, right=None, label=None, proba=None
+    ):
         self.w_star = w_star
         self.th_star = th_star
         self.left = left
         self.right = right
         self.label = label
+        self.proba = proba  # distribuicao de probabilidade por classe (so em folhas)
 
 
 class ObliqueDecisionTreeClassifier:
-    def __init__(self, max_depth=None, n_projections=15, max_features="sqrt"):
+    def __init__(
+        self,
+        max_depth=None,
+        n_projections=15,
+        max_features="sqrt",
+        min_samples_split=2,
+        min_samples_leaf=1,
+        class_weight=None,
+        lda_shrinkage="auto",
+        random_state=None,
+    ):
         self.root = None
         self.max_depth = max_depth
         self.n_projections = n_projections
         self.max_features = max_features
+        self.min_samples_split = min_samples_split
+        self.min_samples_leaf = min_samples_leaf
+        self.class_weight = class_weight
+        self.lda_shrinkage = lda_shrinkage
+        self.random_state = random_state
 
-    def build_tree(self, X, Y, depth=0):
-        if len(np.unique(Y)) == 1 or (
-            self.max_depth is not None and depth >= self.max_depth
+    def fit(self, X, Y, classes=None):
+        X = np.asarray(X)
+        Y = np.asarray(Y)
+        # 'classes' permite que a Forest force o mesmo alinhamento de classes em
+        # todas as arvores (importante p/ predict_proba, ver ObliqueRandomForest.fit)
+        self.classes_ = np.unique(Y) if classes is None else np.asarray(classes)
+        self.rng_ = np.random.default_rng(self.random_state)
+
+        if self.class_weight == "balanced":
+            inverse = np.searchsorted(self.classes_, Y)
+            counts = np.bincount(inverse, minlength=len(self.classes_))
+            n_samples = len(Y)
+            n_classes = len(self.classes_)
+            class_w = n_samples / (n_classes * np.maximum(counts, 1))
+            sample_weight = class_w[inverse]
+        else:
+            sample_weight = np.ones(len(Y))
+
+        self.root = self.build_tree(X, Y, sample_weight, depth=0)
+        return self
+
+    def build_tree(self, X, Y, sample_weight, depth=0):
+        if (
+            len(np.unique(Y)) == 1
+            or (self.max_depth is not None and depth >= self.max_depth)
+            or len(Y) < self.min_samples_split
         ):
-            return Node(label=self.calculate_leaf_label(Y))
+            return self._make_leaf(Y, sample_weight)
 
-        w_star, th_star = self.get_best_split(X, Y)
+        w_star, th_star = self.get_best_split(X, Y, sample_weight)
 
         if w_star is None:
-            return Node(label=self.calculate_leaf_label(Y))
+            return self._make_leaf(Y, sample_weight)
 
-        z = np.dot(X, w_star)
-        left_indices = z <= th_star
-        right_indices = z > th_star
+        z = X @ w_star
+        left_mask = z <= th_star
+        right_mask = ~left_mask
 
-        Xi_left = X[left_indices]
-        Yi_left = Y[left_indices]
+        if left_mask.sum() == 0 or right_mask.sum() == 0:
+            return self._make_leaf(Y, sample_weight)
 
-        Xi_right = X[right_indices]
-        Yi_right = Y[right_indices]
-
-        if len(Xi_left) == 0 or len(Xi_right) == 0:
-            return Node(label=self.calculate_leaf_label(Y))
-
-        left_subtree = self.build_tree(Xi_left, Yi_left, depth + 1)
-        right_subtree = self.build_tree(Xi_right, Yi_right, depth + 1)
+        left_subtree = self.build_tree(
+            X[left_mask], Y[left_mask], sample_weight[left_mask], depth + 1
+        )
+        right_subtree = self.build_tree(
+            X[right_mask], Y[right_mask], sample_weight[right_mask], depth + 1
+        )
 
         return Node(
             w_star=w_star, th_star=th_star, left=left_subtree, right=right_subtree
         )
 
-    # gera n_projections retorna a comb de vetor e limiar com maior ganho
-    def get_best_split(self, X, Y):
+    def _make_leaf(self, Y, sample_weight):
+        inverse = np.searchsorted(self.classes_, Y)
+        weighted_counts = np.bincount(
+            inverse, weights=sample_weight, minlength=len(self.classes_)
+        )
+        total = weighted_counts.sum()
+        proba = (
+            weighted_counts / total
+            if total > 0
+            else np.ones(len(self.classes_)) / len(self.classes_)
+        )
+        label = self.classes_[np.argmax(proba)]
+        return Node(label=label, proba=proba)
+
+    def _n_features_to_use(self, m):
+        if self.max_features == "sqrt":
+            return max(1, int(np.sqrt(m)))
+        elif self.max_features == "log2":
+            return max(1, int(np.log2(m)))
+        elif isinstance(self.max_features, int):
+            return min(self.max_features, m)
+        return m
+
+    # gera n_projections e retorna a comb de vetor e limiar com maior ganho
+    def get_best_split(self, X, Y, sample_weight):
         w_star, th_star = None, None
         max_info_gain = -float("inf")
 
         m = X.shape[1]
-
-        if self.max_features == "sqrt":
-            k = max(1, int(np.sqrt(m)))
-        elif self.max_features == "log2":
-            k = max(1, int(np.log2(m)))
-        elif isinstance(self.max_features, int):
-            k = min(self.max_features, m)
-        else:
-            k = m
+        k = self._n_features_to_use(m)
+        parent_entropy = self.entropy_calc(
+            Y, sample_weight
+        )  # 1x por no, nao por limiar/projecao
 
         for _ in range(self.n_projections):
-            features = np.random.choice(m, size=k, replace=False)
+            features = self.rng_.choice(m, size=k, replace=False)
             X_subset = X[:, features]
 
             W = np.zeros(m)
 
-            # Obtém as classes presentes e a contagem de amostras para cada classe
             classes_in_node, class_counts = np.unique(Y, return_counts=True)
             variances = np.var(X_subset, axis=0)
 
-            # Verifica se há pelo menos 2 amostras para cada classe existente no nó
             if (
                 len(classes_in_node) > 1
                 and np.all(variances > 1e-6)
                 and np.min(class_counts) >= 2
             ):
-                lda = LinearDiscriminantAnalysis(solver="lsqr")
+                # solver="eigen" (nao "lsqr") eh o que de fato expoe scalings_;
+                # com "lsqr" o atributo nao existe e o fit caia sempre no except
+                lda = LinearDiscriminantAnalysis(
+                    solver="eigen", shrinkage=self.lda_shrinkage
+                )
                 try:
-
                     lda.fit(X_subset, Y)
-                    # scalings_ contém os vetores que maximizam a variância entre as classes.
-                    # A coluna 0 ([:, 0]) é a direção discriminativa principal global.
-                    W_subset = lda.scalings_[:, 0]
+                    # so as primeiras (n_classes - 1) colunas de scalings_ sao eixos
+                    # discriminantes de verdade; o resto e ruido de autovalor ~0
+                    n_valid = len(lda.explained_variance_ratio_)
+                    comp_idx = int(self.rng_.integers(0, n_valid)) if n_valid > 1 else 0
+                    W_subset = lda.scalings_[:, comp_idx]
 
                     if np.isnan(W_subset).any() or np.isinf(W_subset).any():
-                        W_subset = np.random.randn(k)
+                        W_subset = self.rng_.standard_normal(k)
                 except Exception:
-                    W_subset = np.random.randn(k)
+                    W_subset = self.rng_.standard_normal(k)
             else:
-                W_subset = np.random.randn(k)
+                W_subset = self.rng_.standard_normal(k)
 
             norm = np.linalg.norm(W_subset)
             if norm > 0:
@@ -109,26 +173,20 @@ class ObliqueDecisionTreeClassifier:
             W[features] = W_subset
 
             feature_values = X @ W
-
             thresholds = np.percentile(feature_values, np.arange(5, 96, 5))
 
             for th in thresholds:
-                left_indices = feature_values <= th
-                right_indices = feature_values > th
+                left_mask = feature_values <= th
+                right_mask = ~left_mask
 
-                Xi_left = X[left_indices]
-                Yi_left = Y[left_indices]
+                n_left = left_mask.sum()
+                n_right = right_mask.sum()
 
-                Xi_right = X[right_indices]
-                Yi_right = Y[right_indices]
-
-                if len(Xi_left) == 0 or len(Xi_right) == 0:
+                if n_left < self.min_samples_leaf or n_right < self.min_samples_leaf:
                     continue
 
                 gain = self.information_gain(
-                    Y,
-                    Yi_left,
-                    Yi_right,
+                    sample_weight, Y, left_mask, right_mask, parent_entropy
                 )
 
                 if gain > max_info_gain:
@@ -138,46 +196,45 @@ class ObliqueDecisionTreeClassifier:
 
         return w_star, th_star
 
-    def entropy_calc(self, y):
-        values, counts = np.unique(y, return_counts=True)
-        p = counts / counts.sum()
+    def entropy_calc(self, y, sample_weight):
+        _, inverse = np.unique(y, return_inverse=True)
+        weighted_counts = np.bincount(inverse, weights=sample_weight)
+        total = weighted_counts.sum()
+        if total <= 0:
+            return 0.0
+        p = weighted_counts / total
         return entropy(p, base=2)
 
-    # retorna a reducao de entropia obtida por um corte (quero maximizar esse valor)
-    def information_gain(self, parent, l_child, r_child):
-        total_parent = len(parent)
-        weight_l = len(l_child) / total_parent
-        weight_r = len(r_child) / total_parent
+    # reducao de entropia obtida por um corte (quero maximizar), agora ponderada
+    # por sample_weight (ver class_weight="balanced" em fit)
+    def information_gain(self, sample_weight, Y, left_mask, right_mask, parent_entropy):
+        w_left = sample_weight[left_mask]
+        w_right = sample_weight[right_mask]
+        total_w = sample_weight.sum()
 
-        gain = self.entropy_calc(parent) - (
-            weight_l * self.entropy_calc(l_child)
-            + weight_r * self.entropy_calc(r_child)
-        )
-        return gain
+        weight_l = w_left.sum() / total_w
+        weight_r = w_right.sum() / total_w
 
-    def calculate_leaf_label(self, Y):
-        values, counts = np.unique(Y, return_counts=True)
-        return values[np.argmax(counts)]
+        ent_l = self.entropy_calc(Y[left_mask], w_left)
+        ent_r = self.entropy_calc(Y[right_mask], w_right)
 
-    def fit(self, X, Y):
-        self.root = self.build_tree(X, Y)
+        return parent_entropy - (weight_l * ent_l + weight_r * ent_r)
+
+    def predict_proba(self, X):
+        X = np.asarray(X)
+        return np.array([self._proba_single(x, self.root) for x in X])
+
+    def _proba_single(self, x, node):
+        if node.label is not None:
+            return node.proba
+        z = np.dot(x, node.w_star)
+        if z <= node.th_star:
+            return self._proba_single(x, node.left)
+        return self._proba_single(x, node.right)
 
     def predict(self, X):
-        predictions = []
-        for x in X:
-            y_hat = self.make_prediction(x, self.root)
-            predictions.append(y_hat)
-        return np.array(predictions)
-
-    def make_prediction(self, x, tree):
-        if tree.label is not None:
-            return tree.label
-
-        feature_val = np.dot(x, tree.w_star)
-        if feature_val <= tree.th_star:
-            return self.make_prediction(x, tree.left)
-        else:
-            return self.make_prediction(x, tree.right)
+        proba = self.predict_proba(X)
+        return self.classes_[np.argmax(proba, axis=1)]
 
 
 class ObliqueRandomForest:
@@ -187,42 +244,88 @@ class ObliqueRandomForest:
         max_depth=None,
         n_projections=15,
         max_features="sqrt",
+        min_samples_split=2,
+        min_samples_leaf=1,
+        class_weight=None,
+        lda_shrinkage="auto",
+        random_state=None,
+        oob_score=False,
     ):
         self.n_estimators = n_estimators
         self.max_depth = max_depth
         self.n_projections = n_projections
         self.max_features = max_features
+        self.min_samples_split = min_samples_split
+        self.min_samples_leaf = min_samples_leaf
+        self.class_weight = class_weight
+        self.lda_shrinkage = lda_shrinkage
+        self.random_state = random_state
+        self.oob_score = oob_score
         self.trees = []
-
-    def _bootstrap_sample(self, X, y):
-        n_samples = X.shape[0]
-        indices = np.random.choice(n_samples, size=n_samples, replace=True)
-        return X[indices], y[indices]
+        self.oob_score_ = None
 
     def fit(self, X, y):
-        self.trees = []
-        for _ in range(self.n_estimators):
-            X_sample, y_sample = self._bootstrap_sample(X, y)
+        X = np.asarray(X)
+        y = np.asarray(y)
+        n_samples = X.shape[0]
+        self.classes_ = np.unique(y)
+        rng = np.random.default_rng(self.random_state)
 
-            # Repassando os parâmetros para cada árvore construída
+        self.trees = []
+        oob_proba_sum = np.zeros((n_samples, len(self.classes_)))
+        oob_count = np.zeros(n_samples)
+
+        for _ in range(self.n_estimators):
+            tree_seed = int(rng.integers(0, 2**32 - 1))
+            boot_rng = np.random.default_rng(tree_seed)
+            idx = boot_rng.integers(0, n_samples, size=n_samples)
+
+            # Repassando os parametros para cada arvore construida
             tree = ObliqueDecisionTreeClassifier(
                 max_depth=self.max_depth,
                 n_projections=self.n_projections,
                 max_features=self.max_features,
+                min_samples_split=self.min_samples_split,
+                min_samples_leaf=self.min_samples_leaf,
+                class_weight=self.class_weight,
+                lda_shrinkage=self.lda_shrinkage,
+                random_state=tree_seed,
             )
-            tree.fit(X_sample, y_sample)
+            # classes=self.classes_ garante que toda arvore devolva um vetor de
+            # probabilidade no MESMO formato, mesmo se uma classe rara ficar de
+            # fora de algum bootstrap especifico
+            tree.fit(X[idx], y[idx], classes=self.classes_)
             self.trees.append(tree)
 
+            if self.oob_score:
+                oob_mask = np.ones(n_samples, dtype=bool)
+                oob_mask[idx] = False
+                if oob_mask.any():
+                    proba_oob = tree.predict_proba(X[oob_mask])
+                    oob_proba_sum[oob_mask] += proba_oob
+                    oob_count[oob_mask] += 1
+
+        if self.oob_score:
+            has_oob = oob_count > 0
+            if has_oob.any():
+                oob_pred = self.classes_[np.argmax(oob_proba_sum[has_oob], axis=1)]
+                self.oob_score_ = float(accuracy_score(y[has_oob], oob_pred))
+            else:
+                self.oob_score_ = None
+        return self
+
+    def predict_proba(self, X):
+        X = np.asarray(X)
+        proba_sum = np.zeros((X.shape[0], len(self.classes_)))
+        for tree in self.trees:
+            proba_sum += tree.predict_proba(X)
+        return proba_sum / len(self.trees)
+
+    # soft voting (media das probabilidades das arvores) em vez de voto majoritario
+    # duro; usa mais informacao de cada arvore e tende a generalizar melhor
     def predict(self, X):
-        predictions = np.array([tree.predict(X) for tree in self.trees])
-        predictions = predictions.T
-
-        final_predictions = []
-        for sample_predictions in predictions:
-            vote = Counter(sample_predictions).most_common(1)[0][0]
-            final_predictions.append(vote)
-
-        return np.array(final_predictions)
+        proba = self.predict_proba(X)
+        return self.classes_[np.argmax(proba, axis=1)]
 
 
 def main():
@@ -233,7 +336,7 @@ def main():
     X_test = data["X_test"]
 
     X_train_local, X_val, y_train_local, y_val = train_test_split(
-        X_train, y_train, test_size=0.2, random_state=42
+        X_train, y_train, test_size=0.2, random_state=42, stratify=y_train
     )
 
     scaler_local = StandardScaler()
@@ -246,35 +349,54 @@ def main():
         max_depth=10,
         n_projections=15,
         max_features="sqrt",
+        min_samples_leaf=2,
+        # class_weight="balanced",
+        lda_shrinkage="auto",
+        random_state=42,
+        oob_score=True,
     )
     classifier_local.fit(X_train_local, y_train_local)
 
     preds_val = classifier_local.predict(X_val)
     acc_local = accuracy_score(y_val, preds_val)
-    print(f"Acurácia de Validação Local: {acc_local:.4f}\n")
+    bal_acc_local = balanced_accuracy_score(y_val, preds_val)
+
+    print(f"Acuracia de Validacao Local:  {acc_local:.4f}")
+    print(f"Acuracia Balanceada (Val.):   {bal_acc_local:.4f}")
+    if classifier_local.oob_score_ is not None:
+        print(f"Acuracia OOB (no treino):     {classifier_local.oob_score_:.4f}")
+    print("\nRelatorio de classificacao (validacao):")
+    print(classification_report(y_val, preds_val, zero_division=0))
+    print("Matriz de confusao (validacao):")
+    print(confusion_matrix(y_val, preds_val))
 
     scaler_final = StandardScaler()
     X_train_scaled = scaler_final.fit_transform(X_train)
     X_test_scaled = scaler_final.transform(X_test)
 
-    # print("Treinando modelo na base completa (100%) para submissão...")
+    # print("Treinando modelo na base completa (100%) para submissao...")
     # clf_final = ObliqueRandomForest(
     #     n_estimators=50,
     #     max_depth=10,
     #     n_projections=50,
     #     max_features="sqrt",
+    #     min_samples_leaf=2,
+    #     class_weight="balanced",
+    #     lda_shrinkage="auto",
+    #     random_state=42,
     # )
     # clf_final.fit(X_train_scaled, y_train)
-
+    #
     # final_predictions = clf_final.predict(X_test_scaled)
-
+    #
     # num_samples = X_test.shape[0]
     # submission_df = pd.DataFrame(
     #     {"ID": np.arange(1, num_samples + 1), "Prediction": final_predictions}
     # )
-
+    #
     # submission_df.to_csv("submission.csv", index=False)
     # print("Arquivo 'submission.csv' gerado com sucesso.")
 
 
-main()
+if __name__ == "__main__":
+    main()
