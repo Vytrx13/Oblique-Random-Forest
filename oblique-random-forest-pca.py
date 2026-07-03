@@ -7,6 +7,7 @@ from collections import Counter
 from sklearn.decomposition import PCA
 import pandas as pd
 
+
 class Node:
     def __init__(self, w_star=None, th_star=None, left=None, right=None, label=None):
         self.w_star = w_star
@@ -243,7 +244,7 @@ def main():
 
     print("Treinando modelo na base completa (100%) para submissão...")
     clf_final = ObliqueRandomForest(
-        n_estimators=50,
+        n_estimators=40,
         max_depth=10,
         n_projections=50,
         max_features="sqrt",
@@ -257,8 +258,8 @@ def main():
         {"ID": np.arange(1, num_samples + 1), "Prediction": final_predictions}
     )
 
-    submission_df.to_csv("submission.csv", index=False)
-    print("Arquivo 'submission.csv' gerado com sucesso.")
+    submission_df.to_csv("submission_pca.csv", index=False)
+    print("Arquivo 'submission_pca.csv' gerado com sucesso.")
 
 
 main()

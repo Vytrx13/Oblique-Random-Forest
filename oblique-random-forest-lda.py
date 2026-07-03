@@ -1,13 +1,9 @@
+import time
 import numpy as np
 import pandas as pd
 from scipy.stats import entropy
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import (
-    accuracy_score,
-    balanced_accuracy_score,
-    classification_report,
-    confusion_matrix,
-)
+from sklearn.metrics import accuracy_score, confusion_matrix
 from sklearn.preprocessing import StandardScaler
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 
@@ -21,7 +17,7 @@ class Node:
         self.left = left
         self.right = right
         self.label = label
-        self.proba = proba  # distribuicao de probabilidade por classe (so em folhas)
+        self.proba = proba  
 
 
 class ObliqueDecisionTreeClassifier:
@@ -49,8 +45,6 @@ class ObliqueDecisionTreeClassifier:
     def fit(self, X, Y, classes=None):
         X = np.asarray(X)
         Y = np.asarray(Y)
-        # 'classes' permite que a Forest force o mesmo alinhamento de classes em
-        # todas as arvores (importante p/ predict_proba, ver ObliqueRandomForest.fit)
         self.classes_ = np.unique(Y) if classes is None else np.asarray(classes)
         self.rng_ = np.random.default_rng(self.random_state)
 
@@ -121,7 +115,6 @@ class ObliqueDecisionTreeClassifier:
             return min(self.max_features, m)
         return m
 
-    # gera n_projections e retorna a comb de vetor e limiar com maior ganho
     def get_best_split(self, X, Y, sample_weight):
         w_star, th_star = None, None
         max_info_gain = -float("inf")
@@ -130,7 +123,7 @@ class ObliqueDecisionTreeClassifier:
         k = self._n_features_to_use(m)
         parent_entropy = self.entropy_calc(
             Y, sample_weight
-        )  # 1x por no, nao por limiar/projecao
+        ) 
 
         for _ in range(self.n_projections):
             features = self.rng_.choice(m, size=k, replace=False)
@@ -146,15 +139,11 @@ class ObliqueDecisionTreeClassifier:
                 and np.all(variances > 1e-6)
                 and np.min(class_counts) >= 2
             ):
-                # solver="eigen" (nao "lsqr") eh o que de fato expoe scalings_;
-                # com "lsqr" o atributo nao existe e o fit caia sempre no except
                 lda = LinearDiscriminantAnalysis(
                     solver="eigen", shrinkage=self.lda_shrinkage
                 )
                 try:
                     lda.fit(X_subset, Y)
-                    # so as primeiras (n_classes - 1) colunas de scalings_ sao eixos
-                    # discriminantes de verdade; o resto e ruido de autovalor ~0
                     n_valid = len(lda.explained_variance_ratio_)
                     comp_idx = int(self.rng_.integers(0, n_valid)) if n_valid > 1 else 0
                     W_subset = lda.scalings_[:, comp_idx]
@@ -205,8 +194,6 @@ class ObliqueDecisionTreeClassifier:
         p = weighted_counts / total
         return entropy(p, base=2)
 
-    # reducao de entropia obtida por um corte (quero maximizar), agora ponderada
-    # por sample_weight (ver class_weight="balanced" em fit)
     def information_gain(self, sample_weight, Y, left_mask, right_mask, parent_entropy):
         w_left = sample_weight[left_mask]
         w_right = sample_weight[right_mask]
@@ -280,7 +267,6 @@ class ObliqueRandomForest:
             boot_rng = np.random.default_rng(tree_seed)
             idx = boot_rng.integers(0, n_samples, size=n_samples)
 
-            # Repassando os parametros para cada arvore construida
             tree = ObliqueDecisionTreeClassifier(
                 max_depth=self.max_depth,
                 n_projections=self.n_projections,
@@ -291,9 +277,6 @@ class ObliqueRandomForest:
                 lda_shrinkage=self.lda_shrinkage,
                 random_state=tree_seed,
             )
-            # classes=self.classes_ garante que toda arvore devolva um vetor de
-            # probabilidade no MESMO formato, mesmo se uma classe rara ficar de
-            # fora de algum bootstrap especifico
             tree.fit(X[idx], y[idx], classes=self.classes_)
             self.trees.append(tree)
 
@@ -321,14 +304,14 @@ class ObliqueRandomForest:
             proba_sum += tree.predict_proba(X)
         return proba_sum / len(self.trees)
 
-    # soft voting (media das probabilidades das arvores) em vez de voto majoritario
-    # duro; usa mais informacao de cada arvore e tende a generalizar melhor
     def predict(self, X):
         proba = self.predict_proba(X)
         return self.classes_[np.argmax(proba, axis=1)]
 
 
 def main():
+    start_time = time.time()
+
     data = np.load("data.npz")
 
     X_train = data["X_train"]
@@ -349,7 +332,7 @@ def main():
         max_depth=10,
         n_projections=15,
         max_features="sqrt",
-        min_samples_leaf=2,
+        min_samples_leaf=1,
         # class_weight="balanced",
         lda_shrinkage="auto",
         random_state=42,
@@ -359,43 +342,43 @@ def main():
 
     preds_val = classifier_local.predict(X_val)
     acc_local = accuracy_score(y_val, preds_val)
-    bal_acc_local = balanced_accuracy_score(y_val, preds_val)
 
     print(f"Acuracia de Validacao Local:  {acc_local:.4f}")
-    print(f"Acuracia Balanceada (Val.):   {bal_acc_local:.4f}")
     if classifier_local.oob_score_ is not None:
         print(f"Acuracia OOB (no treino):     {classifier_local.oob_score_:.4f}")
-    print("\nRelatorio de classificacao (validacao):")
-    print(classification_report(y_val, preds_val, zero_division=0))
-    print("Matriz de confusao (validacao):")
+        
+    print("\nMatriz de confusao (validacao):")
     print(confusion_matrix(y_val, preds_val))
 
     scaler_final = StandardScaler()
     X_train_scaled = scaler_final.fit_transform(X_train)
     X_test_scaled = scaler_final.transform(X_test)
 
-    # print("Treinando modelo na base completa (100%) para submissao...")
-    # clf_final = ObliqueRandomForest(
-    #     n_estimators=50,
-    #     max_depth=10,
-    #     n_projections=50,
-    #     max_features="sqrt",
-    #     min_samples_leaf=2,
-    #     class_weight="balanced",
-    #     lda_shrinkage="auto",
-    #     random_state=42,
-    # )
-    # clf_final.fit(X_train_scaled, y_train)
-    #
-    # final_predictions = clf_final.predict(X_test_scaled)
-    #
-    # num_samples = X_test.shape[0]
-    # submission_df = pd.DataFrame(
-    #     {"ID": np.arange(1, num_samples + 1), "Prediction": final_predictions}
-    # )
-    #
-    # submission_df.to_csv("submission.csv", index=False)
-    # print("Arquivo 'submission.csv' gerado com sucesso.")
+    print("Treinando modelo na base completa (100%) para submissao...")
+    clf_final = ObliqueRandomForest(
+        n_estimators=50,
+        max_depth=10,
+        n_projections=50,
+        max_features="sqrt",
+        min_samples_leaf=1,
+        # class_weight="balanced",
+        lda_shrinkage="auto",
+        random_state=42,
+    )
+    clf_final.fit(X_train_scaled, y_train)
+    
+    final_predictions = clf_final.predict(X_test_scaled)
+    
+    num_samples = X_test.shape[0]
+    submission_df = pd.DataFrame(
+        {"ID": np.arange(1, num_samples + 1), "Prediction": final_predictions}
+    )
+    
+    submission_df.to_csv("submission_lda.csv", index=False)
+    print("Arquivo 'submission_lda.csv' gerado com sucesso.")
+
+    end_time = time.time()
+    print(f"\nTempo de execucao: {end_time - start_time:.2f} segundos")
 
 
 if __name__ == "__main__":
