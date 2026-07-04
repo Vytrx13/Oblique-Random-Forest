@@ -1,10 +1,12 @@
 import time
 import numpy as np
 import pandas as pd
+from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, confusion_matrix
 from sklearn.preprocessing import StandardScaler
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
+from sklearn.model_selection import RandomizedSearchCV
 from scipy.stats import entropy
 
 
@@ -188,7 +190,7 @@ class ObliqueDecisionTreeClassifier:
             return self._proba_single(sample, node.right)
 
 
-class ObliqueRandomForest:
+class ObliqueRandomForest(BaseEstimator, ClassifierMixin):
     def __init__(
         self,
         n_estimators=10,
@@ -230,6 +232,8 @@ class ObliqueRandomForest:
             self.total_fallback_inconsistent += tree.fallback_inconsistent_data_count
             self.total_fallback_exception += tree.fallback_lda_exception_count
 
+        return self
+
     def predict(self, X):
         # soft voting
         proba_sum = np.zeros((X.shape[0], len(self.classes_)))
@@ -238,6 +242,92 @@ class ObliqueRandomForest:
 
         proba_avg = proba_sum / len(self.trees)
         return self.classes_[np.argmax(proba_avg, axis=1)]
+
+
+def otimizar_hiperparametros(X_train, y_train):
+    scaler = StandardScaler()
+    X_train_scaled = scaler.fit_transform(X_train)
+
+    param_distributions = {
+        "n_estimators": [10, 50, 100],
+        "max_depth": [5, 12, 20, None],
+        "n_projections": [10, 30, 50],
+        "max_features": [0.3, 0.5, "sqrt"],
+        "min_samples_leaf": [1, 2, 5],
+    }
+
+    rf = ObliqueRandomForest()
+
+    random_search = RandomizedSearchCV(
+        estimator=rf,
+        param_distributions=param_distributions,
+        n_iter=10,
+        cv=3,
+        scoring="accuracy",
+        n_jobs=-1,
+        random_state=42,
+    )
+
+    random_search.fit(X_train_scaled, y_train)
+
+    print(random_search.best_params_)
+    print(random_search.best_score_)
+
+    return random_search.best_estimator_
+
+
+def run_with_local_train_test_split(X_train, y_train):
+    X_train_local, X_val, y_train_local, y_val = train_test_split(
+        X_train, y_train, test_size=0.2, random_state=42
+    )
+    scaler_local = StandardScaler()
+    X_train_local = scaler_local.fit_transform(X_train_local)
+    X_val = scaler_local.transform(X_val)
+
+    print("Treinando modelo na base local (80%)...")
+    classifier_local = ObliqueRandomForest(
+        n_estimators=5,
+        max_depth=12,
+        n_projections=20,
+        max_features=0.5,
+        min_samples_leaf=2,
+    )
+    classifier_local.fit(X_train_local, y_train_local)
+
+    preds_val = classifier_local.predict(X_val)
+    acc_local = accuracy_score(y_val, preds_val)
+
+    print(f"Acuracia de Validacao Local: {acc_local:.4f}\n")
+    print("Matriz de confusao (validacao):")
+    print(confusion_matrix(y_val, preds_val))
+
+    print("\nEstatisticas de Projecao (Treinamento Local):")
+    print(f"Sucesso no LDA: {classifier_local.total_lda_success}")
+    print(
+        f"Fallback para aleatorio (Dados Inconsistentes): {classifier_local.total_fallback_inconsistent}"
+    )
+    print(
+        f"Fallback para aleatorio (Excecao/NaN no LDA): {classifier_local.total_fallback_exception}"
+    )
+
+
+def run_prediction_submission(X_train, y_train, X_test, classifier):
+    scaler = StandardScaler()
+    X_train_scaled = scaler.fit_transform(X_train)
+    X_test_scaled = scaler.transform(X_test)
+
+    print("\nTreinando modelo otimizado na base completa (100%) para submissao...")
+    classifier.fit(X_train_scaled, y_train)
+
+    final_predictions = classifier.predict(X_test_scaled)
+
+    num_samples = X_test.shape[0]
+    submission_df = pd.DataFrame(
+        {"ID": np.arange(1, num_samples + 1), "Prediction": final_predictions}
+    )
+
+    submission_df.to_csv("submission_lda.csv", index=False)
+    print("Arquivo 'submission_lda.csv' gerado com sucesso.")
 
 
 def main():
@@ -249,63 +339,14 @@ def main():
     y_train = data["y_train"]
     X_test = data["X_test"]
 
-    X_train_local, X_val, y_train_local, y_val = train_test_split(
-        X_train, y_train, test_size=0.2, random_state=42
-    )
+    # run_with_local_train_test_split(X_train, y_train)
 
-    scaler_local = StandardScaler()
-    X_train_local = scaler_local.fit_transform(X_train_local)
-    X_val = scaler_local.transform(X_val)
+    # run_prediction_submission(X_train, y_train, X_test)
 
-    # print("Treinando modelo na base local (80%)...")
-    # classifier_local = ObliqueRandomForest(
-    #     n_estimators=10,
-    #     max_depth=12,
-    #     n_projections=30,
-    #     max_features=0.5,
-    #     min_samples_leaf=2,
-    # )
-    # classifier_local.fit(X_train_local, y_train_local)
+    print("Iniciando busca pelos melhores hiperparametros...")
+    classificador_otimo = otimizar_hiperparametros(X_train, y_train)
 
-    # preds_val = classifier_local.predict(X_val)
-    # acc_local = accuracy_score(y_val, preds_val)
-
-    # print(f"Acuracia de Validacao Local: {acc_local:.4f}\n")
-    # print("Matriz de confusao (validacao):")
-    # print(confusion_matrix(y_val, preds_val))
-
-    # print("\nEstatisticas de Projecao (Treinamento Local):")
-    # print(f"Sucesso no LDA: {classifier_local.total_lda_success}")
-    # print(
-    #     f"Fallback para aleatorio (Dados Inconsistentes): {classifier_local.total_fallback_inconsistent}"
-    # )
-    # print(
-    #     f"Fallback para aleatorio (Excecao/NaN no LDA): {classifier_local.total_fallback_exception}"
-    # )
-
-    scaler_final = StandardScaler()
-    X_train_scaled = scaler_final.fit_transform(X_train)
-    X_test_scaled = scaler_final.transform(X_test)
-
-    print("\nTreinando modelo na base completa (100%) para submissao...")
-    clf_final = ObliqueRandomForest(
-        n_estimators=100,
-        max_depth=12,
-        n_projections=30,
-        max_features=0.5,
-        min_samples_leaf=2,
-    )
-    clf_final.fit(X_train_scaled, y_train)
-
-    final_predictions = clf_final.predict(X_test_scaled)
-
-    num_samples = X_test.shape[0]
-    submission_df = pd.DataFrame(
-        {"ID": np.arange(1, num_samples + 1), "Prediction": final_predictions}
-    )
-
-    submission_df.to_csv("submission_lda.csv", index=False)
-    print("Arquivo 'submission_lda.csv' gerado com sucesso.")
+    run_prediction_submission(X_train, y_train, X_test, classificador_otimo)
 
     end_time = time.time()
     print(f"\nTempo de execucao: {end_time - start_time:.2f} segundos")
