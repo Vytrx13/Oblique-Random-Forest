@@ -94,19 +94,16 @@ class ObliqueDecisionTreeClassifier:
             W = np.zeros(m)
 
             classes_in_node, class_counts = np.unique(Y, return_counts=True)
-            variances = np.var(X_subset, axis=0)
 
             # so usa o LDA se houver dados consistentes, senão usa projeção aleatória
-            if (
-                len(classes_in_node) > 1
-                and np.all(variances > 1e-6)
-                and np.min(class_counts) >= 2
-            ):
-                # quero encontrar direcao q maximize distancia entre as classes e
-                # minimize espallhamento dentro das classes
+            if len(classes_in_node) > 1:
                 lda = LinearDiscriminantAnalysis(solver="eigen", shrinkage="auto")
                 try:
-                    lda.fit(X_subset, Y)
+                    import warnings
+
+                    with warnings.catch_warnings():
+                        warnings.simplefilter("ignore")
+                        lda.fit(X_subset, Y)
                     W_subset = lda.scalings_[:, 0]
                     if np.isnan(W_subset).any() or np.isinf(W_subset).any():
                         W_subset = np.random.randn(k)
