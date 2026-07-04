@@ -80,6 +80,9 @@ class ObliqueDecisionTreeClassifier:
         max_info_gain = -float("inf")
         m = X.shape[1]
 
+        parent_entropy = self.entropy_calc(Y)
+        total_parent = len(Y)
+
         if isinstance(self.max_features, float):
             k = max(1, int(m * self.max_features))
         elif self.max_features == "sqrt":
@@ -137,7 +140,9 @@ class ObliqueDecisionTreeClassifier:
                 ):
                     continue
 
-                gain = self.information_gain(Y, Y[left_mask], Y[right_mask])
+                gain = self.information_gain(
+                    parent_entropy, total_parent, Y[left_mask], Y[right_mask]
+                )
 
                 if gain > max_info_gain:
                     max_info_gain = gain
@@ -151,12 +156,11 @@ class ObliqueDecisionTreeClassifier:
         p = counts / counts.sum()
         return entropy(p, base=2)
 
-    def information_gain(self, parent, l_child, r_child):
-        total_parent = len(parent)
+    def information_gain(self, parent_entropy, total_parent, l_child, r_child):
         weight_l = len(l_child) / total_parent
         weight_r = len(r_child) / total_parent
 
-        gain = self.entropy_calc(parent) - (
+        gain = parent_entropy - (
             weight_l * self.entropy_calc(l_child)
             + weight_r * self.entropy_calc(r_child)
         )
@@ -237,6 +241,7 @@ class ObliqueRandomForest:
 
 
 def main():
+    np.random.seed(67)
     start_time = time.time()
     data = np.load("data.npz")
 
@@ -252,55 +257,55 @@ def main():
     X_train_local = scaler_local.fit_transform(X_train_local)
     X_val = scaler_local.transform(X_val)
 
-    print("Treinando modelo na base local (80%)...")
-    classifier_local = ObliqueRandomForest(
-        n_estimators=10,
-        max_depth=12,
-        n_projections=30,
-        max_features=0.5,
-        min_samples_leaf=2,
-    )
-    classifier_local.fit(X_train_local, y_train_local)
-
-    preds_val = classifier_local.predict(X_val)
-    acc_local = accuracy_score(y_val, preds_val)
-
-    print(f"Acuracia de Validacao Local: {acc_local:.4f}\n")
-    print("Matriz de confusao (validacao):")
-    print(confusion_matrix(y_val, preds_val))
-
-    print("\nEstatisticas de Projecao (Treinamento Local):")
-    print(f"Sucesso no LDA: {classifier_local.total_lda_success}")
-    print(
-        f"Fallback para aleatorio (Dados Inconsistentes): {classifier_local.total_fallback_inconsistent}"
-    )
-    print(
-        f"Fallback para aleatorio (Excecao/NaN no LDA): {classifier_local.total_fallback_exception}"
-    )
-
-    # scaler_final = StandardScaler()
-    # X_train_scaled = scaler_final.fit_transform(X_train)
-    # X_test_scaled = scaler_final.transform(X_test)
-
-    # print("\nTreinando modelo na base completa (100%) para submissao...")
-    # clf_final = ObliqueRandomForest(
-    #     n_estimators=100,
+    # print("Treinando modelo na base local (80%)...")
+    # classifier_local = ObliqueRandomForest(
+    #     n_estimators=10,
     #     max_depth=12,
     #     n_projections=30,
     #     max_features=0.5,
     #     min_samples_leaf=2,
     # )
-    # clf_final.fit(X_train_scaled, y_train)
+    # classifier_local.fit(X_train_local, y_train_local)
 
-    # final_predictions = clf_final.predict(X_test_scaled)
+    # preds_val = classifier_local.predict(X_val)
+    # acc_local = accuracy_score(y_val, preds_val)
 
-    # num_samples = X_test.shape[0]
-    # submission_df = pd.DataFrame(
-    #     {"ID": np.arange(1, num_samples + 1), "Prediction": final_predictions}
+    # print(f"Acuracia de Validacao Local: {acc_local:.4f}\n")
+    # print("Matriz de confusao (validacao):")
+    # print(confusion_matrix(y_val, preds_val))
+
+    # print("\nEstatisticas de Projecao (Treinamento Local):")
+    # print(f"Sucesso no LDA: {classifier_local.total_lda_success}")
+    # print(
+    #     f"Fallback para aleatorio (Dados Inconsistentes): {classifier_local.total_fallback_inconsistent}"
+    # )
+    # print(
+    #     f"Fallback para aleatorio (Excecao/NaN no LDA): {classifier_local.total_fallback_exception}"
     # )
 
-    # submission_df.to_csv("submission_lda.csv", index=False)
-    # print("Arquivo 'submission_lda.csv' gerado com sucesso.")
+    scaler_final = StandardScaler()
+    X_train_scaled = scaler_final.fit_transform(X_train)
+    X_test_scaled = scaler_final.transform(X_test)
+
+    print("\nTreinando modelo na base completa (100%) para submissao...")
+    clf_final = ObliqueRandomForest(
+        n_estimators=100,
+        max_depth=12,
+        n_projections=30,
+        max_features=0.5,
+        min_samples_leaf=2,
+    )
+    clf_final.fit(X_train_scaled, y_train)
+
+    final_predictions = clf_final.predict(X_test_scaled)
+
+    num_samples = X_test.shape[0]
+    submission_df = pd.DataFrame(
+        {"ID": np.arange(1, num_samples + 1), "Prediction": final_predictions}
+    )
+
+    submission_df.to_csv("submission_lda.csv", index=False)
+    print("Arquivo 'submission_lda.csv' gerado com sucesso.")
 
     end_time = time.time()
     print(f"\nTempo de execucao: {end_time - start_time:.2f} segundos")
