@@ -5,7 +5,7 @@ from scipy.stats import entropy
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, confusion_matrix
 from sklearn.preprocessing import StandardScaler
-from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
+from sklearn.svm import LinearSVC
 
 
 class Node:
@@ -17,7 +17,7 @@ class Node:
         self.left = left
         self.right = right
         self.label = label
-        self.proba = proba  
+        self.proba = proba
 
 
 class ObliqueDecisionTreeClassifier:
@@ -107,6 +107,8 @@ class ObliqueDecisionTreeClassifier:
         return Node(label=label, proba=proba)
 
     def _n_features_to_use(self, m):
+        if isinstance(self.max_features, float):
+            return max(1, int(m * self.max_features))
         if self.max_features == "sqrt":
             return max(1, int(np.sqrt(m)))
         elif self.max_features == "log2":
@@ -121,36 +123,34 @@ class ObliqueDecisionTreeClassifier:
 
         m = X.shape[1]
         k = self._n_features_to_use(m)
-        parent_entropy = self.entropy_calc(
-            Y, sample_weight
-        ) 
+        parent_entropy = self.entropy_calc(Y, sample_weight)
 
         for _ in range(self.n_projections):
             features = self.rng_.choice(m, size=k, replace=False)
             X_subset = X[:, features]
-
             W = np.zeros(m)
 
-            classes_in_node, class_counts = np.unique(Y, return_counts=True)
+            classes_in_node = np.unique(Y)
             variances = np.var(X_subset, axis=0)
 
-            if (
-                len(classes_in_node) > 1
-                and np.all(variances > 1e-6)
-                and np.min(class_counts) >= 2
-            ):
-                lda = LinearDiscriminantAnalysis(
-                    solver="eigen", shrinkage=self.lda_shrinkage
-                )
-                try:
-                    lda.fit(X_subset, Y)
-                    n_valid = len(lda.explained_variance_ratio_)
-                    comp_idx = int(self.rng_.integers(0, n_valid)) if n_valid > 1 else 0
-                    W_subset = lda.scalings_[:, comp_idx]
+            if len(classes_in_node) > 1 and np.all(variances > 1e-6):
+                if len(classes_in_node) > 2:
+                    target_classes = self.rng_.choice(classes_in_node, size=2, replace=False)
+                    mask = np.isin(Y, target_classes)
+                    X_linear = X_subset[mask]
+                    Y_linear = Y[mask]
+                else:
+                    X_linear = X_subset
+                    Y_linear = Y
 
-                    if np.isnan(W_subset).any() or np.isinf(W_subset).any():
+                if len(np.unique(Y_linear)) == 2:
+                    svm = LinearSVC(dual=False, C=0.1, class_weight="balanced", max_iter=1000)
+                    try:
+                        svm.fit(X_linear, Y_linear)
+                        W_subset = svm.coef_[0]
+                    except Exception:
                         W_subset = self.rng_.standard_normal(k)
-                except Exception:
+                else:
                     W_subset = self.rng_.standard_normal(k)
             else:
                 W_subset = self.rng_.standard_normal(k)
@@ -162,7 +162,7 @@ class ObliqueDecisionTreeClassifier:
             W[features] = W_subset
 
             feature_values = X @ W
-            thresholds = np.percentile(feature_values, np.arange(5, 96, 5))
+            thresholds = np.percentile(feature_values, np.arange(2, 99, 2))
 
             for th in thresholds:
                 left_mask = feature_values <= th
@@ -328,12 +328,11 @@ def main():
 
     print("Treinando modelo na base local (80%)...")
     classifier_local = ObliqueRandomForest(
-        n_estimators=10,
-        max_depth=10,
-        n_projections=15,
-        max_features="sqrt",
+        n_estimators=50,
+        max_depth=12,
+        n_projections=30,
+        max_features=0.5,
         min_samples_leaf=1,
-        # class_weight="balanced",
         lda_shrinkage="auto",
         random_state=42,
         oob_score=True,
@@ -346,7 +345,7 @@ def main():
     print(f"Acuracia de Validacao Local:  {acc_local:.4f}")
     if classifier_local.oob_score_ is not None:
         print(f"Acuracia OOB (no treino):     {classifier_local.oob_score_:.4f}")
-        
+
     print("\nMatriz de confusao (validacao):")
     print(confusion_matrix(y_val, preds_val))
 
@@ -356,26 +355,25 @@ def main():
 
     print("Treinando modelo na base completa (100%) para submissao...")
     clf_final = ObliqueRandomForest(
-        n_estimators=50,
-        max_depth=10,
-        n_projections=50,
-        max_features="sqrt",
+        n_estimators=100,
+        max_depth=12,
+        n_projections=30,
+        max_features=0.5,
         min_samples_leaf=1,
-        # class_weight="balanced",
         lda_shrinkage="auto",
         random_state=42,
     )
     clf_final.fit(X_train_scaled, y_train)
-    
+
     final_predictions = clf_final.predict(X_test_scaled)
-    
+
     num_samples = X_test.shape[0]
     submission_df = pd.DataFrame(
         {"ID": np.arange(1, num_samples + 1), "Prediction": final_predictions}
     )
-    
-    submission_df.to_csv("submission_lda.csv", index=False)
-    print("Arquivo 'submission_lda.csv' gerado com sucesso.")
+
+    submission_df.to_csv("submission_svm.csv", index=False)
+    print("Arquivo 'submission_svm.csv' gerado com sucesso.")
 
     end_time = time.time()
     print(f"\nTempo de execucao: {end_time - start_time:.2f} segundos")
