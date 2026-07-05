@@ -7,6 +7,7 @@ from sklearn.metrics import accuracy_score, confusion_matrix
 from sklearn.preprocessing import StandardScaler
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 from sklearn.model_selection import RandomizedSearchCV
+from sklearn.datasets import make_classification
 from scipy.stats import entropy
 
 
@@ -284,7 +285,6 @@ def run_with_local_train_test_split(X_train, y_train):
     X_train_local = scaler_local.fit_transform(X_train_local)
     X_val = scaler_local.transform(X_val)
 
-    print("Treinando modelo na base local (80%)...")
     classifier_local = ObliqueRandomForest(
         n_estimators=5,
         max_depth=12,
@@ -316,7 +316,6 @@ def run_prediction_submission(X_train, y_train, X_test, classifier, csvName):
     X_train_scaled = scaler.fit_transform(X_train)
     X_test_scaled = scaler.transform(X_test)
 
-    print("\nTreinando modelo otimizado na base completa (100%) para submissao...")
     classifier.fit(X_train_scaled, y_train)
 
     final_predictions = classifier.predict(X_test_scaled)
@@ -333,19 +332,17 @@ def run_prediction_submission(X_train, y_train, X_test, classifier, csvName):
 def main():
     np.random.seed(67)
     start_time = time.time()
-    data = np.load("data.npz")
+    X, y = make_classification(n_samples=1000, n_features=34, n_informative=20, n_classes=3, random_state=67)
 
-    X_train = data["X_train"]
-    y_train = data["y_train"]
-    X_test = data["X_test"]
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=42
+    )
 
-    # run_with_local_train_test_split(X_train, y_train)
+    scaler = StandardScaler()
+    X_train = scaler.fit_transform(X_train)
+    X_test = scaler.transform(X_test)
 
-
-    # print("Iniciando busca pelos melhores hiperparametros...")
-    # classificador_otimo = otimizar_hiperparametros(X_train, y_train)
-
-    classif = ObliqueRandomForest(
+    model = ObliqueRandomForest(
         n_estimators=100,
         max_depth=12,
         n_projections=10,
@@ -353,7 +350,29 @@ def main():
         min_samples_leaf=5,
     )
 
-    run_prediction_submission(X_train, y_train, X_test, classif, "sub_lda.csv")
+    model.fit(X_train, y_train)
+
+    y_hat = model.predict(X_test)
+
+    acc = accuracy_score(y_test, y_hat)
+    print(f"Accuracy: {acc}")
+
+    # data = np.load("data.npz")
+
+    # X_train = data["X_train"]
+    # y_train = data["y_train"]
+    # X_test = data["X_test"]
+
+    # run_with_local_train_test_split(X_train, y_train)
+    # classif = otimizar_hiperparametros(X_train, y_train)
+    # melhores hiperparametros obtidos
+    #     n_estimators=100,
+    #     max_depth=12,
+    #     n_projections=10,
+    #     max_features=0.5,
+    #     min_samples_leaf=5,
+
+    # run_prediction_submission(X_train, y_train, X_test, classif, "sub_lda.csv")
 
     end_time = time.time()
     print(f"\nTempo de execucao: {end_time - start_time:.2f} segundos")
