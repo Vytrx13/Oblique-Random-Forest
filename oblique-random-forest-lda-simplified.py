@@ -311,7 +311,7 @@ def run_with_local_train_test_split(X_train, y_train):
     )
 
 
-def run_prediction_submission(X_train, y_train, X_test, classifier):
+def run_prediction_submission(X_train, y_train, X_test, classifier, csvName):
     scaler = StandardScaler()
     X_train_scaled = scaler.fit_transform(X_train)
     X_test_scaled = scaler.transform(X_test)
@@ -326,8 +326,8 @@ def run_prediction_submission(X_train, y_train, X_test, classifier):
         {"ID": np.arange(1, num_samples + 1), "Prediction": final_predictions}
     )
 
-    submission_df.to_csv("submission_lda.csv", index=False)
-    print("Arquivo 'submission_lda.csv' gerado com sucesso.")
+    submission_df.to_csv(csvName, index=False)
+    print(f"Arquivo {csvName} gerado com sucesso.")
 
 
 def main():
@@ -341,12 +341,19 @@ def main():
 
     # run_with_local_train_test_split(X_train, y_train)
 
-    # run_prediction_submission(X_train, y_train, X_test)
 
-    print("Iniciando busca pelos melhores hiperparametros...")
-    classificador_otimo = otimizar_hiperparametros(X_train, y_train)
+    # print("Iniciando busca pelos melhores hiperparametros...")
+    # classificador_otimo = otimizar_hiperparametros(X_train, y_train)
 
-    run_prediction_submission(X_train, y_train, X_test, classificador_otimo)
+    classif = ObliqueRandomForest(
+        n_estimators=100,
+        max_depth=12,
+        n_projections=10,
+        max_features=0.5,
+        min_samples_leaf=5,
+    )
+
+    run_prediction_submission(X_train, y_train, X_test, classif, "sub_lda.csv")
 
     end_time = time.time()
     print(f"\nTempo de execucao: {end_time - start_time:.2f} segundos")
