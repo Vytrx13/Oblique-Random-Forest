@@ -1,3 +1,4 @@
+import time
 import numpy as np
 import pandas as pd
 import warnings
@@ -8,6 +9,7 @@ from sklearn.metrics import accuracy_score
 from sklearn.preprocessing import StandardScaler
 from sklearn.cross_decomposition import CCA
 from collections import Counter
+from sklearn.datasets import make_classification
 
 
 class Node:
@@ -221,51 +223,34 @@ class ObliqueRandomForest:
 
 
 def main():
-    data = np.load("data.npz")
-    X_train = data["X_train"]
-    y_train = data["y_train"]
-    X_test = data["X_test"]
+    np.random.seed(67)
+    start_time = time.time()
+    X, y = make_classification(n_samples=1000, n_features=34, n_informative=20, n_classes=3, random_state=67)
 
-    X_train_local, X_val, y_train_local, y_val = train_test_split(
-        X_train, y_train, test_size=0.2, random_state=42
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=42
     )
 
-    # scaler_local = StandardScaler()
-    # X_train_local = scaler_local.fit_transform(X_train_local)
-    # X_val = scaler_local.transform(X_val)
+    scaler = StandardScaler()
+    X_train = scaler.fit_transform(X_train)
+    X_test = scaler.transform(X_test)
 
-    # print("Treinando modelo na base local (80%)...")
-    # classifier_local = ObliqueRandomForest(
-    #     n_estimators=10,
-    #     max_depth=10,
-    #     n_projections=50,
-    #     max_features="sqrt",
-    # )
-    # classifier_local.fit(X_train_local, y_train_local)
-    # preds_val = classifier_local.predict(X_val)
-    # acc_local = accuracy_score(y_val, preds_val)
-    # print(f"Acuracia de Validacao Local: {acc_local:.4f}\n")
-
-    scaler_final = StandardScaler()
-    X_train_scaled = scaler_final.fit_transform(X_train)
-    X_test_scaled = scaler_final.transform(X_test)
-
-    print("Treinando modelo na base completa (100%) para submissao...")
-    clf_final = ObliqueRandomForest(
+    model = ObliqueRandomForest(
         n_estimators=50,
         max_depth=10,
         n_projections=50,
         max_features="sqrt",
     )
-    clf_final.fit(X_train_scaled, y_train)
-    final_predictions = clf_final.predict(X_test_scaled)
 
-    num_samples = X_test.shape[0]
-    submission_df = pd.DataFrame(
-        {"ID": np.arange(1, num_samples + 1), "Prediction": final_predictions}
-    )
-    submission_df.to_csv("submission_cca.csv", index=False)
-    print("Arquivo 'submission_cca.csv' gerado com sucesso.")
+    model.fit(X_train, y_train)
+    
+    y_hat = model.predict(X_test)
 
+    acc = accuracy_score(y_test, y_hat)
+    print(f"Accuracy: {acc}")
 
-main()
+    end_time = time.time()
+    print(f"\nTempo de execucao: {end_time - start_time:.2f} segundos")
+
+if __name__ == "__main__":
+    main()
