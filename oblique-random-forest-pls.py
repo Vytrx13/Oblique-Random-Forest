@@ -10,39 +10,41 @@ from sklearn.cross_decomposition import PLSRegression
 from collections import Counter
 from sklearn.datasets import make_classification
 from sklearn.ensemble import RandomForestClassifier # usada para comparaçao com a obliqua
+from joblib import Parallel, delayed
 
 def main():
     np.random.seed(67)
     start_time = time.time()
 
-    compare_with_traditional()
-    # X, y = make_classification(n_samples=1000, n_features=34, n_informative=20, n_classes=3, random_state=67)
+    X, y = make_classification(n_samples=1000, n_features=34, n_informative=20, n_classes=3, random_state=67)
 
-    # X_train, X_test, y_train, y_test = train_test_split(
-    #     X, y, test_size=0.2, random_state=42
-    # )
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=42
+    )
 
-    # scaler = StandardScaler()
-    # X_train = scaler.fit_transform(X_train)
-    # X_test = scaler.transform(X_test)
+    scaler = StandardScaler()
+    X_train = scaler.fit_transform(X_train)
+    X_test = scaler.transform(X_test)
 
-    # model = ObliqueRandomForest(
-    #     n_estimators=50,
-    #     max_depth=10,
-    #     n_projections=50,
-    #     max_features="sqrt",
-    # )
+    model = ObliqueRandomForest(
+        n_estimators=50,
+        max_depth=10,
+        n_projections=50,
+        max_features="sqrt",
+    )
 
-    # model.fit(X_train, y_train)
+    model.fit(X_train, y_train)
     
-    # y_hat = model.predict(X_test)
+    y_hat = model.predict(X_test)
 
-    # acc = accuracy_score(y_test, y_hat)
-    # print(f"Accuracy: {acc}")
+    acc = accuracy_score(y_test, y_hat)
+    print(f"Accuracy: {acc}")
 
-    # end_time = time.time()
-    # print(f"\nTempo de execucao: {end_time - start_time:.2f} segundos")
+    end_time = time.time()
+    print(f"\nTempo de execucao: {end_time - start_time:.2f} segundos")
 
+
+    # compare_with_traditional()
 
     # data = np.load("data.npz")
     # X_train = data["X_train"]
@@ -281,6 +283,18 @@ class ObliqueDecisionTreeClassifier:
         else:
             return self.make_prediction(x, tree.right)
 
+def _train_single_tree(X, y, max_depth, n_projections, max_features):
+    n_samples = X.shape[0]
+    indices = np.random.choice(n_samples, size=n_samples, replace=True)
+    X_sample, y_sample = X[indices], y[indices]
+
+    tree = ObliqueDecisionTreeClassifier(
+        max_depth=max_depth,
+        n_projections=n_projections,
+        max_features=max_features,
+    )
+    tree.fit(X_sample, y_sample)
+    return tree
 
 class ObliqueRandomForest:
     def __init__(
@@ -289,34 +303,27 @@ class ObliqueRandomForest:
         max_depth=None,
         n_projections=15,
         max_features="sqrt",
+        n_jobs=-1,
     ):
         self.n_estimators = n_estimators
         self.max_depth = max_depth
         self.n_projections = n_projections
         self.max_features = max_features
+        self.n_jobs = n_jobs
         self.trees = []
-
-    def _bootstrap_sample(self, X, y):
-        n_samples = X.shape[0]
-        indices = np.random.choice(n_samples, size=n_samples, replace=True)
-        return X[indices], y[indices]
 
     def fit(self, X, y):
-        self.trees = []
-        for _ in range(self.n_estimators):
-            X_sample, y_sample = self._bootstrap_sample(X, y)
-
-            tree = ObliqueDecisionTreeClassifier(
-                max_depth=self.max_depth,
-                n_projections=self.n_projections,
-                max_features=self.max_features,
-            )
-            tree.fit(X_sample, y_sample)
-            self.trees.append(tree)
+        # para treinar multiplas arvores ao mesmo tempo usando todos os cores do cpu
+        self.trees = Parallel(n_jobs=self.n_jobs)(
+            delayed(_train_single_tree)(X, y, self.max_depth, self.n_projections, self.max_features)
+            for _ in range(self.n_estimators)
+        )
 
     def predict(self, X):
-        predictions = np.array([tree.predict(X) for tree in self.trees])
-        predictions = predictions.T
+        predictions = Parallel(n_jobs=self.n_jobs)(
+            delayed(tree.predict)(X) for tree in self.trees
+        )
+        predictions = np.array(predictions).T
 
         final_predictions = []
         for sample_predictions in predictions:
