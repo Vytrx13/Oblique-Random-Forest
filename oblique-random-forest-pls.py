@@ -9,6 +9,109 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.cross_decomposition import PLSRegression
 from collections import Counter
 from sklearn.datasets import make_classification
+from sklearn.ensemble import RandomForestClassifier # usada para comparaçao com a obliqua
+
+def main():
+    np.random.seed(67)
+    start_time = time.time()
+
+    compare_with_traditional()
+    # X, y = make_classification(n_samples=1000, n_features=34, n_informative=20, n_classes=3, random_state=67)
+
+    # X_train, X_test, y_train, y_test = train_test_split(
+    #     X, y, test_size=0.2, random_state=42
+    # )
+
+    # scaler = StandardScaler()
+    # X_train = scaler.fit_transform(X_train)
+    # X_test = scaler.transform(X_test)
+
+    # model = ObliqueRandomForest(
+    #     n_estimators=50,
+    #     max_depth=10,
+    #     n_projections=50,
+    #     max_features="sqrt",
+    # )
+
+    # model.fit(X_train, y_train)
+    
+    # y_hat = model.predict(X_test)
+
+    # acc = accuracy_score(y_test, y_hat)
+    # print(f"Accuracy: {acc}")
+
+    # end_time = time.time()
+    # print(f"\nTempo de execucao: {end_time - start_time:.2f} segundos")
+
+
+    # data = np.load("data.npz")
+    # X_train = data["X_train"]
+    # y_train = data["y_train"]
+    # X_test = data["X_test"]
+
+    # clf_final = ObliqueRandomForest(
+    #     n_estimators=50,
+    #     max_depth=10,
+    #     n_projections=50,
+    #     max_features="sqrt",
+    # )
+    # clf_final.fit(X_train_scaled, y_train)
+    # final_predictions = clf_final.predict(X_test_scaled)
+
+    # num_samples = X_test.shape[0]
+    # submission_df = pd.DataFrame(
+    #     {"ID": np.arange(1, num_samples + 1), "Prediction": final_predictions}
+    # )
+    # submission_df.to_csv("submission_pls.csv", index=False)
+    # print("Arquivo 'submission_pls.csv' gerado com sucesso.")
+
+def compare_with_traditional():
+    for n_samples in [200, 500, 1000]:
+        print(f"--- Testando para {n_samples} amostras ---")
+
+        X, y = make_classification(
+            n_samples=n_samples,
+            n_features=34,
+            n_informative=20,
+            n_classes=3,
+            random_state=67,
+        )
+
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y, test_size=0.2, random_state=67
+        )
+
+        scaler = StandardScaler()
+        X_train = scaler.fit_transform(X_train)
+        X_test = scaler.transform(X_test)
+
+        start_time_orf = time.time()
+        orf = ObliqueRandomForest(
+            n_estimators=50,
+            max_depth=10,
+            n_projections=50,
+            max_features="sqrt",
+        )
+        orf.fit(X_train, y_train)
+        preds_orf = orf.predict(X_test)
+        acc_orf = accuracy_score(y_test, preds_orf)
+        end_time_orf = time.time()
+
+        start_time_rf = time.time()
+        rf = RandomForestClassifier(
+            n_estimators=50, max_depth=10, max_features="sqrt", random_state=67
+        )
+        rf.fit(X_train, y_train)
+        preds_rf = rf.predict(X_test)
+        acc_rf = accuracy_score(y_test, preds_rf)
+        end_time_rf = time.time()
+
+        print(
+            f"Oblique Random Forest - Acuracia: {acc_orf:.4f} | Tempo: {end_time_orf - start_time_orf:.4f}s"
+        )
+        print(
+            f"Traditional Random Forest - Acuracia: {acc_rf:.4f} | Tempo: {end_time_rf - start_time_rf:.4f}s\n"
+        )
 
 
 class Node:
@@ -222,82 +325,4 @@ class ObliqueRandomForest:
 
         return np.array(final_predictions)
 
-
-def main():
-    np.random.seed(67)
-    start_time = time.time()
-    X, y = make_classification(n_samples=1000, n_features=34, n_informative=20, n_classes=3, random_state=67)
-
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=42
-    )
-
-    scaler = StandardScaler()
-    X_train = scaler.fit_transform(X_train)
-    X_test = scaler.transform(X_test)
-
-    model = ObliqueRandomForest(
-        n_estimators=50,
-        max_depth=10,
-        n_projections=50,
-        max_features="sqrt",
-    )
-
-    model.fit(X_train, y_train)
-    
-    y_hat = model.predict(X_test)
-
-    acc = accuracy_score(y_test, y_hat)
-    print(f"Accuracy: {acc}")
-
-    end_time = time.time()
-    print(f"\nTempo de execucao: {end_time - start_time:.2f} segundos")
-
-    # data = np.load("data.npz")
-    # X_train = data["X_train"]
-    # y_train = data["y_train"]
-    # X_test = data["X_test"]
-
-    # X_train_local, X_val, y_train_local, y_val = train_test_split(
-    #     X_train, y_train, test_size=0.2, random_state=42
-    # )
-
-    # scaler_local = StandardScaler()
-    # X_train_local = scaler_local.fit_transform(X_train_local)
-    # X_val = scaler_local.transform(X_val)
-
-    # print("Treinando modelo na base local (80%)...")
-    # classifier_local = ObliqueRandomForest(
-    #     n_estimators=10,
-    #     max_depth=10,
-    #     n_projections=50,
-    #     max_features="sqrt",
-    # )
-    # classifier_local.fit(X_train_local, y_train_local)
-    # preds_val = classifier_local.predict(X_val)
-    # acc_local = accuracy_score(y_val, preds_val)
-    # print(f"Acuracia de Validacao Local: {acc_local:.4f}\n")
-
-    # scaler_final = StandardScaler()
-    # X_train_scaled = scaler_final.fit_transform(X_train)
-    # X_test_scaled = scaler_final.transform(X_test)
-
-    # print("Treinando modelo na base completa (100%) para submissao...")
-    # clf_final = ObliqueRandomForest(
-    #     n_estimators=50,
-    #     max_depth=10,
-    #     n_projections=50,
-    #     max_features="sqrt",
-    # )
-    # clf_final.fit(X_train_scaled, y_train)
-    # final_predictions = clf_final.predict(X_test_scaled)
-
-    # num_samples = X_test.shape[0]
-    # submission_df = pd.DataFrame(
-    #     {"ID": np.arange(1, num_samples + 1), "Prediction": final_predictions}
-    # )
-    # submission_df.to_csv("submission_pls.csv", index=False)
-    # print("Arquivo 'submission_pls.csv' gerado com sucesso.")
-
-if __name__ == "__main__":
-    main()
+main()
